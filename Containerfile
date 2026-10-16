@@ -9,7 +9,7 @@ COPY server/Cargo.toml server/Cargo.toml
 COPY crates/example/Cargo.toml crates/example/Cargo.toml
 RUN mkdir server/src crates/example/src \
     && echo 'fn main() {}' > server/src/main.rs \
-    && touch server/src/lib.rs crates/example/src/lib.rs \
+    && touch crates/example/src/lib.rs \
     && cargo build --release --locked
 
 # Cargo decides freshness by mtime and COPY keeps the context's (older)

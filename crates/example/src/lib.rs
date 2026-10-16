@@ -1,9 +1,10 @@
 //! The example feature: its data type, rules, and SQL.
 //!
-//! This crate knows nothing about HTTP. The server crate exposes it in
-//! `routes/example.rs`.
+//! This crate knows nothing about HTTP. The server does not use it yet.
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
+
+use std::{error::Error, fmt};
 
 use serde::Serialize;
 use sqlx::SqlitePool;
@@ -26,17 +27,39 @@ pub struct Example {
 }
 
 /// Why an example could not be created.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 pub enum ExampleError {
     /// The name is empty.
-    #[error("name is required")]
     EmptyName,
     /// The name is on the reserved list.
-    #[error("name {0:?} is reserved")]
     ReservedName(String),
     /// The database query failed.
-    #[error("create example")]
-    Database(#[from] sqlx::Error),
+    Database(sqlx::Error),
+}
+
+impl fmt::Display for ExampleError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::EmptyName => f.write_str("name is required"),
+            Self::ReservedName(name) => write!(f, "name {name:?} is reserved"),
+            Self::Database(_) => f.write_str("create example"),
+        }
+    }
+}
+
+impl Error for ExampleError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Database(err) => Some(err),
+            _ => None,
+        }
+    }
+}
+
+impl From<sqlx::Error> for ExampleError {
+    fn from(err: sqlx::Error) -> Self {
+        Self::Database(err)
+    }
 }
 
 /// Validates `name` and stores a new example.

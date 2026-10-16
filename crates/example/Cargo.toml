@@ -9,7 +9,6 @@ publish.workspace = true
 [dependencies]
 serde.workspace = true
 sqlx.workspace = true
-thiserror.workspace = true
 time.workspace = true
 uuid.workspace = true
 

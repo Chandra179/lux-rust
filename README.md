@@ -1,6 +1,7 @@
 ## Lux
 
-Lux contains a Rust API server and a React frontend.
+Lux contains a Rust server and a React frontend. The server loads its
+configuration and opens the database; it has no HTTP endpoints yet.
 
 ### Prerequisites
 
@@ -19,9 +20,9 @@ Lux contains a Rust API server and a React frontend.
 make run
 ```
 
-Run it from the repository root. The API listens on `http://localhost:8080`.
-Health and readiness are at `/health` and `/ready`, and `POST /example` creates an
-example record.
+Run it from the repository root. It loads the configuration, opens the SQLite
+database, applies the migrations, prints a line and exits. Nothing listens on a
+port yet, so the frontend's `/api` proxy has no server behind it.
 
 Settings come from `server/config/config_<env>.yaml`, where `<env>` is the value
 of `APP_ENVIRONMENT` (`dev` by default). The database location can be overridden
@@ -69,9 +70,9 @@ make web-build
 ├── server/        Rust API server (crate lux-server)
 │   ├── config/        config_dev.yaml, config_prd.yaml
 │   ├── migrations/    SQL migrations
-│   └── src/           startup, config, db, error, routes/ (one file per resource)
+│   └── src/           main.rs, config.rs, db.rs
 ├── crates/
-│   └── example/   example feature as its own crate (type, rules, SQL)
+│   └── example/   example feature as its own crate (type, rules, SQL); not used by the server yet
 ├── web/           React frontend (Vite)
 ├── docs/
 │   └── style.md   Rust style guide

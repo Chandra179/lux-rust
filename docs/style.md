@@ -1,7 +1,7 @@
 # Rust style guide
 
-Style rules for the Rust code in this repo (`server/` and any crate added to the workspace).
-The frontend is covered by `make web-lint` and `make web-typecheck`.
+Style rules for the Rust code in this repo (`server/`, `crates/*`). The frontend is covered by
+`make web-lint` and `make web-typecheck`.
 
 Every rule is tagged by who enforces it:
 
@@ -40,7 +40,7 @@ When a rule here and a tool disagree, fix the tool config or this file in the sa
   or `FromStr` over a hand-named `from_*` when the conversion is the point. **tool** clippy
   `new_without_default`; the rest is **review**.
 - Every public type implements `Debug`. **tool** `missing_debug_implementations`. A type that holds a
-  secret or a handle that has no `Debug` of its own implements it by hand with
+  secret or a handle with no `Debug` of its own implements it by hand with
   `finish_non_exhaustive()` so nothing sensitive is printed. **review**
 - Take `&str` / `&[T]` in parameters, not `&String` / `&Vec<T>`. **tool** clippy `ptr_arg`
 - JSON object keys are `snake_case` (serde's default; `Example` serialises as `id`, `name`,
@@ -49,84 +49,49 @@ When a rule here and a tool disagree, fix the tool config or this file in the sa
 
 ## 3. Errors
 
-- **One central error type**: `AppError` in `error.rs`, a `thiserror` enum whose variants are
-  HTTP-level categories (`InvalidRequest`, `Conflict`, `Database`, ...), as in realworld-axum-sqlx.
-  Underlying errors are wrapped with `#[from]` so they stay the `source()`. A new kind of failure is
-  a new variant. A resource gets its own error enum only when callers must tell several of its
-  failures apart, and that enum converts into `AppError` with `From`. **review**
-- **`anyhow` is only for the binary edge**: `main`, `run()` and startup code. Modules never return
-  `anyhow::Error`. **review**
-- **No `unwrap()` or `expect()` outside tests and startup.** `unwrap_used` and `expect_used` are
-  `warn` in `[workspace.lints]`, so `-D warnings` fails the build. **tool** Startup code does not
-  need them: it returns errors with `?`. Test code is exempt through one attribute at the top of each
-  crate's `lib.rs`: `#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]`.
-  Request-path code returns an error instead of panicking.
-- **Always add context.** Startup failures use `.context(...)` / `.with_context(...)` and say which
-  file, key or address failed. An error's `Display` text says what failed and with which value; the
-  text sent to the client is separate and fixed. **review**
-- **Map errors to HTTP in one place**: `server/src/error.rs`. `AppError`'s `IntoResponse` is the
-  only code that chooses a status code for a failure. Handlers return `Result<_, AppError>` and read
-  request bodies with the `AppJson` extractor, so malformed JSON becomes a 400 `AppError` too.
-  Handlers never build error responses by hand. **review**
-- **Client messages are fixed strings** (`{"error": "invalid request"}`, `"name is reserved"`,
-  `"internal error"`), so no internal detail or user input leaks into a response. **review**
+- **Errors use only the standard library.** `main` returns `Result<(), Box<dyn Error>>`, so `?`
+  passes any error up. Library code (`crates/*`) returns its own error enum that implements
+  `Display`, `std::error::Error` (with `source()` for a wrapped error) and `From` for the errors it
+  wraps. Add `thiserror` or `anyhow` only if hand-written errors become a burden. **review**
+- **No `unwrap()` or `expect()` outside tests.** `unwrap_used` and `expect_used` are `warn` in
+  `[workspace.lints]`, so `-D warnings` fails the build. **tool** Startup code does not need them:
+  it returns errors with `?`. Test code is exempt through one attribute at the top of each crate's
+  root file: `#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]`.
+- **Always add context.** Startup failures use `.map_err(|e| format!("what failed: {e}"))` and say
+  which file, key or address failed. An error's `Display` text says what failed and with which value.
+  **review**
+- When HTTP is added, map errors to responses in one place (a central `AppError` with
+  `IntoResponse`), send fixed client messages, and never put internal detail or user input in a
+  response. **review**
 
 ## 4. Code layout
 
 Rust has no mandated project layout. This workspace has two kinds of crate, as in the
-rust10x/rust-web-app template (a web server crate plus library crates): `server/` is the web
-server, and `crates/<name>/` holds a feature's data type, rules and SQL with no HTTP in it. Inside
-the server, top-level files are named for their role (`config.rs`, `startup.rs`, `db.rs`) and there
-is one file per resource under `routes/`, as in zero-to-production and realworld-axum-sqlx. There
-are no `handlers/`, `services/` or `models/` layers.
-
-**Crates and routes**
+rust10x/rust-web-app template (a server crate plus library crates): `server/` is the executable,
+and `crates/<name>/` holds a feature's data type, rules and SQL with no HTTP in it. Inside the
+server, files are named for their role (`config.rs`, `db.rs`). There are no `handlers/`,
+`services/` or `models/` layers.
 
 - **A feature crate** (`crates/example`) has its own `Cargo.toml`, is a member of the workspace and
   is listed in `[workspace.dependencies]` as a path dependency. It exports the type, a `create`-style
-  function taking `&SqlitePool`, and its own `thiserror` error enum. It never depends on `server`.
+  function taking `&SqlitePool`, and its own error enum. It never depends on `server`.
   To add one: create `crates/<name>/`, add it to `members` and `[workspace.dependencies]` in the root
   `Cargo.toml`, depend on it from `server`, and add its `Cargo.toml` and a stub `src/lib.rs` to the
   dependency layer of the `Containerfile`.
-- **One file per resource in `server/src/routes/`** (`example.rs`, `health.rs`) holds that
-  resource's `router()`, its request type and its handlers. To add a resource: create
-  `routes/<name>.rs`, declare it in `routes.rs` and merge its `router()` there, convert the crate's
-  error in `error.rs` (`impl From<ExampleError> for AppError`), and add a migration if it needs
-  tables.
-- **Grow by splitting the file, not by adding layers.** When a route file gets long it becomes
-  `routes/<name>.rs` plus a `routes/<name>/` folder of submodules.
-- **Handlers are thin**: extract, call the crate, return `Result<_, AppError>`. Rules live in the
-  feature crate as plain functions (`validate_name`) so a unit test can call them without HTTP.
-  **review**
-- **Concrete types, no traits by default.** Handlers take `State<SqlitePool>` and call the crate's
-  functions directly. Add a trait only when there is a real second implementation or an external
-  system you must fake (a mail provider), never to mock our own database access: SQL is tested
-  against a real SQLite database (section 8). axum's dependency-injection example shows the
-  trait-object pattern for the cases that do need it. **review**
-- **Shared state is the `SqlitePool`**, which is cheap to clone. Resource routers are
-  `Router<SqlitePool>`, merged in `routes.rs`, with the state attached once in `build_router`
-  (`startup.rs`). When a second shared resource appears, group them in an `AppState` struct that
-  derives `FromRef`, so a handler can still ask for just the piece it needs. **review**
-
-**Files and visibility**
-
 - **No `mod.rs`.** A module `foo` is `foo.rs`, and its children are `foo/bar.rs`. The Rust Book calls
   this the idiomatic style, and it keeps editor tabs distinguishable. **tool** clippy
   `mod_module_files`.
-- **Keep visibility narrow.** Modules in `server/src/lib.rs` are private except `config` and `db`,
-  and `run` at the root. An item marked `pub` inside a private module is only crate-wide, so use
-  `pub` where another module needs it and leave the rest private. **review**
-
-**Middleware**
-
-- **Middleware is tower.** The server currently uses two layers, wired in `build_router`
-  (`startup.rs`): axum's `DefaultBodyLimit` and tower-http's `TimeoutLayer`. When app-specific
-  middleware is needed, write it as an `async fn(Request, Next) -> Response` for
-  `axum::middleware::from_fn` (or `from_fn_with_state`), one file per concern in a `middleware/`
-  folder (declared by `middleware.rs`, no `mod.rs`). Write a full `tower::Service` only to publish a
-  layer. **review**
-- **Assemble the stack once**, in `build_router`. With more than two layers use `ServiceBuilder`: the
-  first layer listed is the outermost, so the order reads top to bottom. **review**
+- **Keep visibility narrow.** An item marked `pub` inside a private module is only crate-wide, so
+  use `pub` where another module needs it and leave the rest private. **review**
+- **Concrete types, no traits by default.** Add a trait only when there is a real second
+  implementation or an external system you must fake (a mail provider), never to mock our own
+  database access: SQL is tested against a real SQLite database (section 8). axum's
+  dependency-injection example shows the trait-object pattern for the cases that do need it.
+  **review**
+- **Growing the server.** When endpoints come, the shape used by zero-to-production and
+  realworld-axum-sqlx fits: a thin `main.rs` calling a `lib.rs`, one file per resource under
+  `routes/`, state attached once when the router is built, middleware as tower layers (`from_fn` for
+  app-specific ones), and tests in `server/tests/api/main.rs` against a spawned app. **review**
 
 **Data**
 
@@ -146,18 +111,16 @@ are no `handlers/`, `services/` or `models/` layers.
 - **Never hold a `std::sync::Mutex` or `RwLock` guard across an `.await`.** **tool** clippy
   `await_holding_lock` (in `clippy::all`). If you really need a lock across an await, use
   `tokio::sync::Mutex`, and first ask whether the state needs a lock at all.
-- **Handlers must be cancellation-safe.** axum drops the handler future when the client
-  disconnects or the timeout layer fires, so any `.await` can be the last thing that runs. Do
+- **Async code must be cancellation-safe.** A future can be dropped at any `.await`. Do
   multi-statement writes in one `sqlx` transaction (it rolls back on drop), not as separate
   statements that can stop halfway. **review**
-- **Detached tasks** (`tokio::spawn` without joining) log their own errors and stop on shutdown.
+- **Detached tasks** (`tokio::spawn` without joining) handle their own errors and stop on shutdown.
   **review**
 
 ## 6. Logging
 
-There is no logging or telemetry setup yet, on purpose. The server prints one startup line with
-`println!`, and the default panic hook writes panic messages to stderr. `dbg!` is rejected by clippy
-`dbg_macro` (**tool**). When logging is added:
+There is no logging or telemetry setup yet, on purpose. The server prints one line with `println!`.
+`dbg!` is rejected by clippy `dbg_macro` (**tool**). When logging is added:
 
 - Use `tracing` with one subscriber setup in a single `telemetry.rs`. **review**
 - Use structured fields and a constant message (`info!(%address, "server listening")`). **review**
@@ -171,18 +134,16 @@ There is no logging or telemetry setup yet, on purpose. The server prints one st
   `APP_ENVIRONMENT` (`dev` by default, `prd`; letters, digits, `-` and `_` only, because it becomes
   part of a file name). **Environment variables hold deployment values**: today `SQLITE_DSN`
   (overrides `sqlite.dsn`). Deployment-only values are left empty in `config_prd.yaml`, so startup
-  fails until the environment supplies them. A new override
-  is added in `config.rs`, `.env.example` and `README.md` together. **review**
-- **Durations and sizes in YAML carry their unit in the key**: `http.request_timeout_in_second`,
-  `http.shutdown_timeout_in_second`, `http.max_body_size_in_bytes`. Only add a timeout key if the
-  code enforces it; `axum::serve` exposes no read or idle timeout, so there are none. **review**
+  fails until the environment supplies them. A new override is added in `config.rs`, `.env.example`
+  and `README.md` together. **review**
+- **Only add a config key if the code uses it.** Durations and sizes carry their unit in the key
+  (`..._in_second`, `..._in_bytes`). **review**
 - **Unknown keys are rejected.** Every config struct has `#[serde(deny_unknown_fields)]`, so a typo
   fails at startup instead of being ignored. **review**
 - **`validate()` runs right after loading** and reports every problem at once, each naming its key
-  (`http.port is required`). **review**
-- Config is loaded once in `run()` and handed to what needs it (`build_router`, `db::connect`). No
-  `std::env::var` in handlers or stores; the only reads are `APP_ENVIRONMENT` in `startup.rs` and
-  the `SQLITE_DSN` override in `config.rs`. **review**
+  (`sqlite.dsn is required`). **review**
+- Config is loaded once in `main` and handed to what needs it. No `std::env::var` outside
+  `main.rs` (`APP_ENVIRONMENT`) and `config.rs` (the `SQLITE_DSN` override). **review**
 - **Secrets never go in YAML or git.** `.env.example` lists names with placeholder values; `.env` is
   git-ignored. **review**
 
@@ -194,10 +155,7 @@ There is no logging or telemetry setup yet, on purpose. The server prints one st
   fresh SQLite file with the migrations applied (`#[sqlx::test(migrations =
   "../../server/migrations")]` in a crate under `crates/`), so a test takes a `SqlitePool` argument
   and calls the function under test (`create`). No mocks of our own queries. **tool** `make test`
-- There is no `tests/` directory and no HTTP-level test yet. When one is needed, use a multi-file
-  integration test at `server/tests/api/main.rs` that builds the app with `build_router`, binds
-  `127.0.0.1:0`, and gives each test its own temp SQLite file (a temp file rather than `:memory:`,
-  because each pooled connection to `:memory:` sees a different database). **review**
+- There is no `tests/` directory yet. Add one with the first endpoint. **review**
 - Name tests for behaviour: `create_persists_a_row`. **review**
 - Tests may `unwrap()` and `expect()`; see section 3.
 
@@ -205,8 +163,8 @@ There is no logging or telemetry setup yet, on purpose. The server prints one st
 
 - **`///` on every public item.** The first sentence is a one-line summary of at most about 15
   words; add `# Errors` and `# Panics` sections when they apply. Modules open with a `//!` summary.
-  **tool** `missing_docs` covers everything a crate exports (in `server`: `config`, `db`, `run`; in a feature crate: every `pub` item) plus the crate-level `//!` of each
-  binary and build script; documenting items in private modules is **review**.
+  **tool** `missing_docs` covers everything a library crate exports plus the crate-level `//!` of
+  each binary and build script; documenting items in private modules is **review**.
 - **Comments explain why, not what.** Name the constraint, the trade-off or the bug being avoided.
   Explain hard-coded values, or give them a named constant. **review**
 - No commented-out code; git has the history. `todo!()` and `unimplemented!()` do not merge.
@@ -236,15 +194,9 @@ server/
 ├── config/               config_dev.yaml, config_prd.yaml (selected by APP_ENVIRONMENT)
 ├── migrations/           sqlx SQL migrations (0001_create_examples.sql, ...)
 └── src/
-    ├── main.rs           a few lines: calls lux_server::run()
-    ├── lib.rs            module tree and the public API (run)
-    ├── startup.rs        build_router() with body limit and timeout, run(): config → database →
-    │                     router → serve, graceful shutdown on SIGINT/SIGTERM
+    ├── main.rs           loads config, opens the database, applies migrations
     ├── config.rs         serde structs, load() with the SQLITE_DSN override, validate()
-    ├── error.rs          AppError (the one place errors become HTTP), AppJson
-    ├── db.rs             SQLite pool and embedded migrations
-    ├── routes.rs         declares the route modules, router() merging them
-    └── routes/           one file per resource: health.rs, example.rs
+    └── db.rs             SQLite pool and embedded migrations
 ```
 
 ## Sources

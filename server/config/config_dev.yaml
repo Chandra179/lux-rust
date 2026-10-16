@@ -1,8 +1,2 @@
-http:
-  port: "8080"
-  request_timeout_in_second: 120
-  shutdown_timeout_in_second: 5
-  max_body_size_in_bytes: 1048576
-
 sqlite:
   dsn: "lux.db"

@@ -1,9 +1,3 @@
-http:
-  port: "8080"
-  request_timeout_in_second: 120
-  shutdown_timeout_in_second: 30
-  max_body_size_in_bytes: 1048576
-
 # Deployment-specific value: set SQLITE_DSN in the environment.
 sqlite:
   dsn: ""
