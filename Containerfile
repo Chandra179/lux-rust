@@ -6,15 +6,16 @@ WORKDIR /src
 # layer is reused until Cargo.toml or Cargo.lock change.
 COPY Cargo.toml Cargo.lock ./
 COPY server/Cargo.toml server/Cargo.toml
-RUN mkdir server/src \
+COPY crates/example/Cargo.toml crates/example/Cargo.toml
+RUN mkdir server/src crates/example/src \
     && echo 'fn main() {}' > server/src/main.rs \
-    && touch server/src/lib.rs \
+    && touch server/src/lib.rs crates/example/src/lib.rs \
     && cargo build --release --locked
 
 # Cargo decides freshness by mtime and COPY keeps the context's (older)
 # timestamps, so touch the sources to force a rebuild over the stubs.
 COPY . .
-RUN find server/src -type f -name '*.rs' -exec touch {} + \
+RUN find server/src crates/example/src -type f -name '*.rs' -exec touch {} + \
     && cargo build --release --locked \
     && strip target/release/lux-server
 
@@ -30,8 +31,7 @@ COPY --from=build --chown=lux:lux /src/target/release/lux-server /app/lux-server
 COPY --from=build --chown=lux:lux /src/server/config /app/server/config
 
 ENV APP_ENVIRONMENT=prd \
-    SQLITE_DSN=/data/lux.db \
-    KV_PATH=/data/lux.redb
+    SQLITE_DSN=/data/lux.db
 
 EXPOSE 8080
 VOLUME ["/data"]

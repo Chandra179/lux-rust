@@ -21,10 +21,6 @@ export default defineConfig({
         changeOrigin: true,
         rewrite: (requestPath) => requestPath.replace(/^\/api/, ""),
       },
-      "/swagger": {
-        target: "http://localhost:8080",
-        changeOrigin: true,
-      },
     },
   },
 })

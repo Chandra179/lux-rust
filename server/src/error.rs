@@ -1,7 +1,5 @@
-//! HTTP-facing error type. Domain errors stay in their modules; this is the
-//! one place that maps them to status codes and response bodies.
-
-use std::{error::Error, sync::Arc};
+//! HTTP-facing error type. Handlers return `Result<_, AppError>`; this is the
+//! one place that maps failures to status codes and response bodies.
 
 use axum::{
     Json,
@@ -9,54 +7,53 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
+use example::ExampleError;
 use serde::Serialize;
 
-use crate::modules::example::ExampleError;
-
+/// Everything a handler can fail with.
 #[derive(Debug, thiserror::Error)]
 pub enum AppError {
+    /// The request body or parameters were not acceptable (400).
     #[error("invalid request: {0}")]
     InvalidRequest(String),
+    /// The request body exceeded the configured limit (413).
     #[error("request body too large")]
     PayloadTooLarge,
-    #[error("internal error: {0}")]
-    Internal(String),
-    #[error(transparent)]
-    Example(#[from] ExampleError),
+    /// The request conflicts with existing state (409). The text is shown to
+    /// the client, so keep it fixed and free of user input.
+    #[error("conflict: {0}")]
+    Conflict(&'static str),
+    /// A database query failed (500).
+    #[error("database error")]
+    Database(#[from] sqlx::Error),
 }
 
 /// Body of every error response.
-#[derive(Debug, Serialize, utoipa::ToSchema)]
-pub struct ErrorBody {
-    pub error: String,
+#[derive(Debug, Serialize)]
+struct ErrorBody {
+    /// Short, fixed description of what went wrong.
+    error: &'static str,
 }
-
-/// Full error detail, attached to the response extensions so the request log
-/// can record it. It is never sent to the client.
-#[derive(Debug, Clone)]
-pub struct ErrorDetail(pub Arc<str>);
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
-        let (status, message) = match &self {
+        let (status, error) = match self {
             Self::InvalidRequest(_) => (StatusCode::BAD_REQUEST, "invalid request"),
             Self::PayloadTooLarge => (StatusCode::PAYLOAD_TOO_LARGE, "request body too large"),
-            Self::Internal(_) | Self::Example(ExampleError::Store(_)) => {
-                (StatusCode::INTERNAL_SERVER_ERROR, "internal error")
-            }
-            Self::Example(ExampleError::ReservedName(_)) => {
-                (StatusCode::CONFLICT, "name is reserved")
-            }
+            Self::Conflict(message) => (StatusCode::CONFLICT, message),
+            Self::Database(_) => (StatusCode::INTERNAL_SERVER_ERROR, "internal error"),
         };
+        (status, Json(ErrorBody { error })).into_response()
+    }
+}
 
-        let body = ErrorBody {
-            error: message.to_owned(),
-        };
-        let mut response = (status, Json(body)).into_response();
-        response
-            .extensions_mut()
-            .insert(ErrorDetail(error_chain(&self).into()));
-        response
+impl From<ExampleError> for AppError {
+    fn from(err: ExampleError) -> Self {
+        match err {
+            ExampleError::EmptyName => Self::InvalidRequest("name is required".to_owned()),
+            ExampleError::ReservedName(_) => Self::Conflict("name is reserved"),
+            ExampleError::Database(err) => Self::Database(err),
+        }
     }
 }
 
@@ -74,18 +71,6 @@ impl From<JsonRejection> for AppError {
     }
 }
 
-/// Renders an error and its sources as `outer: inner: root`.
-fn error_chain(err: &(dyn Error + 'static)) -> String {
-    let mut message = err.to_string();
-    let mut source = err.source();
-    while let Some(cause) = source {
-        message.push_str(": ");
-        message.push_str(&cause.to_string());
-        source = cause.source();
-    }
-    message
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -98,32 +83,45 @@ mod tests {
                 StatusCode::BAD_REQUEST,
             ),
             (AppError::PayloadTooLarge, StatusCode::PAYLOAD_TOO_LARGE),
+            (AppError::Conflict("taken"), StatusCode::CONFLICT),
             (
-                AppError::Internal("x".to_owned()),
-                StatusCode::INTERNAL_SERVER_ERROR,
-            ),
-            (
-                AppError::Example(ExampleError::ReservedName("admin".to_owned())),
-                StatusCode::CONFLICT,
-            ),
-            (
-                AppError::Example(ExampleError::Store(sqlx::Error::PoolTimedOut)),
+                AppError::Database(sqlx::Error::PoolTimedOut),
                 StatusCode::INTERNAL_SERVER_ERROR,
             ),
         ];
 
         for (err, expected) in cases {
-            let response = err.into_response();
-            assert_eq!(response.status(), expected);
-            assert!(response.extensions().get::<ErrorDetail>().is_some());
+            assert_eq!(err.into_response().status(), expected);
         }
     }
 
     #[test]
-    fn error_chain_includes_sources() {
-        let err = AppError::Example(ExampleError::Store(sqlx::Error::PoolTimedOut));
-        let chain = error_chain(&err);
-        assert!(chain.starts_with("create example"), "{chain}");
-        assert!(chain.contains("pool timed out"), "{chain}");
+    fn example_errors_map_to_http_categories() {
+        let cases = [
+            (ExampleError::EmptyName, StatusCode::BAD_REQUEST),
+            (
+                ExampleError::ReservedName("admin".to_owned()),
+                StatusCode::CONFLICT,
+            ),
+            (
+                ExampleError::Database(sqlx::Error::PoolTimedOut),
+                StatusCode::INTERNAL_SERVER_ERROR,
+            ),
+        ];
+
+        for (err, expected) in cases {
+            assert_eq!(AppError::from(err).into_response().status(), expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn client_sees_only_the_fixed_message() {
+        let response = AppError::Database(sqlx::Error::PoolTimedOut).into_response();
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+
+        assert_eq!(&body[..], br#"{"error":"internal error"}"#);
     }
 }

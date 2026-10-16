@@ -8,7 +8,6 @@ web
 docs
 *.db
 *.db-*
-*.redb
 .env
 # The builder image (see Containerfile) already ships the toolchain pinned in
 # this file; keep it out so rustup does not try to resolve or install

@@ -1,7 +1,5 @@
-import { ArrowUpRight, Hexagon } from "lucide-react"
+import { Hexagon } from "lucide-react"
 import { NavLink, Outlet } from "react-router-dom"
-
-import { Button } from "@/components/ui/button"
 
 const navigation = [{ label: "Home", to: "/" }]
 
@@ -34,12 +32,6 @@ export function AppShell() {
               </NavLink>
             ))}
           </nav>
-
-          <Button asChild size="sm" variant="outline">
-            <a href="/swagger/index.html" target="_blank" rel="noreferrer">
-              API docs <ArrowUpRight className="size-3.5" />
-            </a>
-          </Button>
         </div>
       </header>
 

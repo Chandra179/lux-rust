@@ -4,17 +4,5 @@ http:
   shutdown_timeout_in_second: 5
   max_body_size_in_bytes: 1048576
 
-logger:
-  level: debug
-
-middleware:
-  request_log:
-    skip_paths: ["/health"]
-    log_query: true
-    query_allowlist: ["page", "limit", "cursor"]
-
 sqlite:
   dsn: "lux.db"
-
-kv:
-  path: "lux.redb"

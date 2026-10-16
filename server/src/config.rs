@@ -1,7 +1,7 @@
 //! Application configuration, loaded from `server/config/config_<env>.yaml`.
 //!
-//! Deployment-specific values (datastore locations) can be overridden with
-//! the `SQLITE_DSN` and `KV_PATH` environment variables.
+//! The database location can be overridden with the `SQLITE_DSN` environment
+//! variable.
 
 use std::{env, path::Path, time::Duration};
 
@@ -15,14 +15,8 @@ use serde::Deserialize;
 pub struct Config {
     /// HTTP listener, timeouts, and body limit.
     pub http: HttpConfig,
-    /// Log verbosity.
-    pub logger: LoggerConfig,
-    /// Per-middleware settings.
-    pub middleware: MiddlewareConfig,
     /// SQLite database location.
     pub sqlite: SqliteConfig,
-    /// Embedded key-value store location.
-    pub kv: KvConfig,
 }
 
 /// HTTP server settings.
@@ -39,34 +33,6 @@ pub struct HttpConfig {
     pub max_body_size_in_bytes: usize,
 }
 
-/// Logging settings.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LoggerConfig {
-    /// One of `debug`, `info`, `warn`, `error`.
-    pub level: String,
-}
-
-/// Settings for the HTTP middleware stack.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct MiddlewareConfig {
-    /// The per-request log line.
-    pub request_log: RequestLogConfig,
-}
-
-/// Settings for the per-request log line.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct RequestLogConfig {
-    /// Exact request paths that are not logged (for example `/health`).
-    pub skip_paths: Vec<String>,
-    /// Query keys that may be logged when `log_query` is on.
-    pub query_allowlist: Vec<String>,
-    /// Whether to log the allow-listed part of the query string.
-    pub log_query: bool,
-}
-
 /// SQLite settings.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -75,37 +41,24 @@ pub struct SqliteConfig {
     pub dsn: String,
 }
 
-/// Embedded key-value store settings.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct KvConfig {
-    /// Path of the embedded key-value database file.
-    pub path: String,
-}
-
 /// Every problem found by [`Config::validate`], joined into one message.
 #[derive(Debug, thiserror::Error)]
 #[error("{}", .0.join("; "))]
 pub struct ValidationError(Vec<String>);
 
 impl Config {
-    /// Loads the config file at `path` and applies the `SQLITE_DSN` and
-    /// `KV_PATH` environment overrides.
+    /// Loads the config file at `path` and applies the `SQLITE_DSN`
+    /// environment override.
     pub fn load(path: &Path) -> anyhow::Result<Self> {
-        Self::load_with_overrides(path, env::var("SQLITE_DSN").ok(), env::var("KV_PATH").ok())
+        Self::load_with_overrides(path, env::var("SQLITE_DSN").ok())
     }
 
-    /// Like [`Config::load`], but with explicit overrides instead of reading
+    /// Like [`Config::load`], but with an explicit override instead of reading
     /// the environment.
-    pub fn load_with_overrides(
-        path: &Path,
-        sqlite_dsn: Option<String>,
-        kv_path: Option<String>,
-    ) -> anyhow::Result<Self> {
+    pub fn load_with_overrides(path: &Path, sqlite_dsn: Option<String>) -> anyhow::Result<Self> {
         let settings = Settings::builder()
             .add_source(File::from(path).format(FileFormat::Yaml))
             .set_override_option("sqlite.dsn", sqlite_dsn)?
-            .set_override_option("kv.path", kv_path)?
             .build()
             .with_context(|| format!("read {}", path.display()))?;
 
@@ -131,24 +84,8 @@ impl Config {
             problems.push("http.max_body_size_in_bytes must be greater than zero".to_owned());
         }
 
-        let level = self.logger.level.trim().to_ascii_lowercase();
-        if !matches!(level.as_str(), "debug" | "info" | "warn" | "error") {
-            problems.push("logger.level must be one of debug, info, warn, or error".to_owned());
-        }
-
         if self.sqlite.dsn.trim().is_empty() {
             problems.push("sqlite.dsn is required".to_owned());
-        }
-        if self.kv.path.trim().is_empty() {
-            problems.push("kv.path is required".to_owned());
-        }
-
-        let request_log = &self.middleware.request_log;
-        if request_log.log_query && request_log.query_allowlist.is_empty() {
-            problems.push(
-                "middleware.request_log.query_allowlist is required when log_query is enabled"
-                    .to_owned(),
-            );
         }
 
         if problems.is_empty() {
@@ -197,7 +134,7 @@ mod tests {
     }
 
     fn dev_config() -> Config {
-        Config::load_with_overrides(&config_file("config_dev.yaml"), None, None).unwrap()
+        Config::load_with_overrides(&config_file("config_dev.yaml"), None).unwrap()
     }
 
     #[test]
@@ -205,26 +142,18 @@ mod tests {
         let cfg = dev_config();
         assert_eq!(cfg.http.port, "8080");
         assert_eq!(cfg.sqlite.dsn, "lux.db");
-        assert_eq!(cfg.kv.path, "lux.redb");
     }
 
     #[test]
-    fn prd_config_requires_datastore_overrides() {
+    fn prd_config_requires_the_database_override() {
         let path = config_file("config_prd.yaml");
 
-        let err = Config::load_with_overrides(&path, None, None).unwrap_err();
+        let err = Config::load_with_overrides(&path, None).unwrap_err();
         let message = format!("{err:#}");
         assert!(message.contains("sqlite.dsn is required"), "{message}");
-        assert!(message.contains("kv.path is required"), "{message}");
 
-        let cfg = Config::load_with_overrides(
-            &path,
-            Some("/data/lux.db".to_owned()),
-            Some("/data/lux.redb".to_owned()),
-        )
-        .unwrap();
+        let cfg = Config::load_with_overrides(&path, Some("/data/lux.db".to_owned())).unwrap();
         assert_eq!(cfg.sqlite.dsn, "/data/lux.db");
-        assert_eq!(cfg.kv.path, "/data/lux.redb");
     }
 
     #[test]
@@ -234,13 +163,13 @@ mod tests {
         let yaml = fs::read_to_string(config_file("config_dev.yaml")).unwrap();
         fs::write(&path, format!("{yaml}\nsurprise: true\n")).unwrap();
 
-        assert!(Config::load_with_overrides(&path, None, None).is_err());
+        assert!(Config::load_with_overrides(&path, None).is_err());
     }
 
     #[test]
     fn missing_file_is_an_error() {
         let path = config_file("does_not_exist.yaml");
-        assert!(Config::load_with_overrides(&path, None, None).is_err());
+        assert!(Config::load_with_overrides(&path, None).is_err());
     }
 
     #[test]
@@ -250,8 +179,7 @@ mod tests {
         cfg.http.request_timeout_in_second = 0;
         cfg.http.shutdown_timeout_in_second = 0;
         cfg.http.max_body_size_in_bytes = 0;
-        cfg.logger.level = "loud".to_owned();
-        cfg.middleware.request_log.query_allowlist.clear();
+        cfg.sqlite.dsn = String::new();
 
         let message = cfg.validate().unwrap_err().to_string();
         for expected in [
@@ -259,21 +187,13 @@ mod tests {
             "http.request_timeout_in_second must be greater than zero",
             "http.shutdown_timeout_in_second must be greater than zero",
             "http.max_body_size_in_bytes must be greater than zero",
-            "logger.level must be one of debug, info, warn, or error",
-            "middleware.request_log.query_allowlist is required when log_query is enabled",
+            "sqlite.dsn is required",
         ] {
             assert!(
                 message.contains(expected),
                 "missing {expected:?} in {message:?}"
             );
         }
-    }
-
-    #[test]
-    fn logger_level_is_case_insensitive() {
-        let mut cfg = dev_config();
-        cfg.logger.level = " WARN ".to_owned();
-        assert!(cfg.validate().is_ok());
     }
 
     #[test]

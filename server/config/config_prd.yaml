@@ -4,18 +4,6 @@ http:
   shutdown_timeout_in_second: 30
   max_body_size_in_bytes: 1048576
 
-logger:
-  level: info
-
-middleware:
-  request_log:
-    skip_paths: ["/health"]
-    log_query: false
-    query_allowlist: []
-
-# Deployment-specific values: set SQLITE_DSN and KV_PATH in the environment.
+# Deployment-specific value: set SQLITE_DSN in the environment.
 sqlite:
   dsn: ""
-
-kv:
-  path: ""

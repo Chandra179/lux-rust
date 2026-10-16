@@ -5,7 +5,6 @@ PODMAN ?= podman
 
 APP_ENVIRONMENT ?= dev
 SQLITE_DSN ?= lux.db
-KV_PATH ?= lux.redb
 
 .PHONY: all build run test lint fmt verify migrate-up podman-build \
 	web-install web-dev web-build web-lint web-typecheck
@@ -16,7 +15,7 @@ build:
 	$(CARGO) build --release --locked
 
 run:
-	APP_ENVIRONMENT="$(APP_ENVIRONMENT)" SQLITE_DSN="$(SQLITE_DSN)" KV_PATH="$(KV_PATH)" $(CARGO) run -p lux-server
+	APP_ENVIRONMENT="$(APP_ENVIRONMENT)" SQLITE_DSN="$(SQLITE_DSN)" $(CARGO) run -p lux-server
 
 test:
 	$(CARGO) test --workspace

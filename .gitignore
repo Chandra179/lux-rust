@@ -9,4 +9,3 @@ lcov.info
 .env
 *.db
 *.db-*
-*.redb
