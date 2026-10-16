@@ -1,0 +1,12 @@
+# Rust build output
+target/
+
+# Rust test and coverage output
+*.profraw
+lcov.info
+
+# Local environment and server runtime data
+.env
+*.db
+*.db-*
+*.redb
